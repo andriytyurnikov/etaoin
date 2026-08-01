@@ -78,8 +78,33 @@ jobs:
         echo "exit=$?"
         /usr/libexec/PlistBuddy -c print ~/Library/WebDriver/com.apple.Safari.plist 2>&1 || true
 
-    # Same invocation CI uses, narrowed to the namespace in question.
-    - name: Run AutoFill namespace
+    # Same invocation CI uses, narrowed to the namespace in question. Expected to fail:
+    # this is the before half of the control, so the run must continue past it.
+    - name: Run AutoFill namespace (before injection)
+      continue-on-error: true
+      env:
+        ETAOIN_TIMEOUT: 60
+      run: bb test:jvm --browsers safari --nses etaoin.api-autofill-test
+
+    # The runner has no saved website logins at all. If the login-form heuristic needs
+    # something to offer, giving it one credential for the test origin should flip the
+    # behaviour; if focus still does not move, credentials were never the variable.
+    #
+    # The password is fabricated and the machine is a throwaway runner. Port 0 means any
+    # port, because the test server binds a fresh one per run.
+    - name: Inject website credentials into login keychain
+      run: |
+        kc="$HOME/Library/Keychains/login.keychain-db"
+        for host in localhost 127.0.0.1; do
+          security add-internet-password \
+            -a af-user -w "probe-not-a-real-secret" \
+            -s "$host" -r "http" -P 0 -A -U "$kc" \
+            && echo "added $host" || echo "add failed for $host"
+        done
+        echo "--- items now present (metadata only, no -g) ---"
+        security find-internet-password -s localhost 2>&1 | head -25 || echo "none found"
+
+    - name: Run AutoFill namespace (after injection)
       env:
         ETAOIN_TIMEOUT: 60
       run: bb test:jvm --browsers safari --nses etaoin.api-autofill-test
