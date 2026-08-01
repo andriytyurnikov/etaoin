@@ -78,33 +78,46 @@ jobs:
         echo "exit=$?"
         /usr/libexec/PlistBuddy -c print ~/Library/WebDriver/com.apple.Safari.plist 2>&1 || true
 
-    # Same invocation CI uses, narrowed to the namespace in question. Expected to fail:
-    # this is the before half of the control, so the run must continue past it.
-    - name: Run AutoFill namespace (before injection)
-      continue-on-error: true
-      env:
-        ETAOIN_TIMEOUT: 60
-      run: bb test:jvm --browsers safari --nses etaoin.api-autofill-test
-
-    # The runner has no saved website logins at all. If the login-form heuristic needs
-    # something to offer, giving it one credential for the test origin should flip the
-    # behaviour; if focus still does not move, credentials were never the variable.
-    #
-    # The password is fabricated and the machine is a throwaway runner. Port 0 means any
-    # port, because the test server binds a fresh one per run.
-    - name: Inject website credentials into login keychain
+    # safaridriver does not honour acceptInsecureCerts, so an https fixture needs a cert
+    # the system genuinely trusts rather than one Safari is talked into accepting.
+    - name: Generate and trust a localhost certificate
       run: |
-        kc="$HOME/Library/Keychains/login.keychain-db"
-        for host in localhost 127.0.0.1; do
-          security add-internet-password \
-            -a af-user -w "probe-not-a-real-secret" \
-            -s "$host" -r "http" -P 0 -A -U "$kc" \
-            && echo "added $host" || echo "add failed for $host"
-        done
-        echo "--- items now present (metadata only, no -g) ---"
-        security find-internet-password -s localhost 2>&1 | head -25 || echo "none found"
+        mkdir -p /tmp/probe-tls
+        openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+          -keyout /tmp/probe-tls/key.pem -out /tmp/probe-tls/cert.pem \
+          -subj "/CN=localhost" \
+          -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+        cat /tmp/probe-tls/key.pem /tmp/probe-tls/cert.pem > /tmp/probe-tls/combined.pem
+        sudo security add-trusted-cert -d -r trustRoot \
+          -k /Library/Keychains/System.keychain /tmp/probe-tls/cert.pem
+        echo "--- verify ---"
+        security verify-cert -c /tmp/probe-tls/cert.pem 2>&1 || true
 
-    - name: Run AutoFill namespace (after injection)
-      env:
-        ETAOIN_TIMEOUT: 60
-      run: bb test:jvm --browsers safari --nses etaoin.api-autofill-test
+    # Both schemes served from the same fixtures on the same machine, so the only
+    # difference between the two probe runs below is the scheme.
+    - name: Serve fixtures over http and https
+      run: |
+        root=env/test/resources/static
+        python3 -m http.server 8080 --bind localhost --directory "$root" \
+          >/tmp/http.log 2>&1 &
+        python3 probe/https_server.py 8443 /tmp/probe-tls/combined.pem "$root" \
+          >/tmp/https.log 2>&1 &
+        for i in $(seq 1 30); do
+          curl -sf http://localhost:8080/autofill-off.html >/dev/null && break || sleep 1
+        done
+        for i in $(seq 1 30); do
+          curl -sf --cacert /tmp/probe-tls/cert.pem \
+            https://localhost:8443/autofill-off.html >/dev/null && break || sleep 1
+        done
+        echo "http  -> $(curl -so /dev/null -w '%{http_code}' \
+          http://localhost:8080/autofill-off.html)"
+        echo "https -> $(curl -so /dev/null -w '%{http_code}' --cacert /tmp/probe-tls/cert.pem \
+          https://localhost:8443/autofill-off.html)"
+        cat /tmp/https.log
+
+    # http first, as the control: it should match the failing CI result exactly.
+    - name: Probe http (control)
+      run: bb -Sdeps '{:deps {etaoin/etaoin {:local/root "."}}}' probe/autofill_scheme.clj http://localhost:8080
+
+    - name: Probe https
+      run: bb -Sdeps '{:deps {etaoin/etaoin {:local/root "."}}}' probe/autofill_scheme.clj https://localhost:8443
