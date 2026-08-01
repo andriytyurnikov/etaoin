@@ -1,0 +1,67 @@
+# Throwaway diagnostic, fork-only. Reports what the macos-latest image carries for
+# Safari AutoFill, then runs the autofill namespace to see whether the quirk fires
+# there. Never merge this; delete the branch once the question is answered.
+
+name: Safari AutoFill probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['probe/**']
+
+jobs:
+  probe:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Image identity
+      run: |
+        sw_vers
+        uname -m
+        defaults read /Applications/Safari.app/Contents/Info.plist CFBundleShortVersionString
+
+    # The runner image only runs `safaridriver --enable` and sets AllowRemoteAutomation;
+    # nothing in actions/runner-images mentions AutoFill. Confirm that from the inside.
+    - name: Safari AutoFill preferences
+      run: |
+        for k in AutoFillPasswords AutoFillCreditCardData \
+                 AutoFillFromAddressBook AutoFillMiscellaneousForms; do
+          printf '%s = ' "$k"
+          defaults read com.apple.Safari "$k" 2>&1 || true
+        done
+        echo "--- whole com.apple.Safari domain ---"
+        defaults read com.apple.Safari 2>&1 | head -60 || true
+
+    # The live hypothesis: AutoFill is enabled but has nothing to offer, so Safari
+    # never classifies the form as a login form and never moves focus.
+    - name: Credential store state
+      run: |
+        echo "--- keychains ---"
+        security list-keychains
+        ls -la ~/Library/Keychains 2>&1 || true
+        echo "--- any internet passwords? (metadata only, no -g) ---"
+        security find-internet-password 2>&1 | head -20 || echo "none found"
+        echo "--- any generic passwords? ---"
+        security find-generic-password 2>&1 | head -20 || echo "none found"
+        echo "--- Apple ID / iCloud accounts ---"
+        defaults read MobileMeAccounts 2>&1 || true
+
+    - name: WebDriver config
+      run: /usr/libexec/PlistBuddy -c print ~/Library/WebDriver/com.apple.Safari.plist 2>&1 || true
+
+    - uses: actions/setup-java@v5
+      with:
+        distribution: temurin
+        java-version: '25'
+
+    - uses: DeLaGuardo/setup-clojure@13.6.1
+      with:
+        bb: latest
+
+    # Same invocation CI uses, narrowed to the namespace in question.
+    - name: Run AutoFill namespace
+      env:
+        ETAOIN_TIMEOUT: 60
+      run: bb test:jvm --browsers safari --nses etaoin.api-autofill-test
