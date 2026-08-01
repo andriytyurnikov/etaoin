@@ -119,8 +119,36 @@ jobs:
     - name: Probe http (control)
       run: bb -Sdeps '{:deps {etaoin/etaoin {:local/root "."}}}' probe/autofill_scheme.clj http://localhost:8080
 
-    - name: Probe https
-      run: bb -Sdeps '{:deps {etaoin/etaoin {:local/root "."}}}' probe/autofill_scheme.clj https://localhost:8443
+    # The runner's plist is an empty dict, so every AutoFill key is unset and Safari
+    # behaves as though the features are off. Locally the quirk is gated on the
+    # "Usernames and passwords" toggle -- switch it off and the steal stops, switch it
+    # back on and it returns. There is no UI here, so write the keys directly and see
+    # whether an explicitly enabled Safari reproduces the issue.
+    #
+    # Safari is not running at this point; safaridriver launches it fresh for the probe
+    # below, so it reads these at startup. cfprefsd is killed to drop any cached view of
+    # a domain that did not previously exist.
+    - name: Enable Safari AutoFill explicitly
+      run: |
+        plist="$HOME/Library/Containers/com.apple.Safari/Data/Library/Preferences/com.apple.Safari.plist"
+        for k in AutoFillPasswords AutoFillMiscellaneousForms \
+                 AutoFillFromAddressBook AutoFillCreditCardData; do
+          defaults write com.apple.Safari "$k" -bool true \
+            && echo "wrote $k" || echo "FAILED to write $k"
+        done
+        killall cfprefsd 2>/dev/null || true
+        sleep 1
+        echo "--- read back via defaults ---"
+        for k in AutoFillPasswords AutoFillMiscellaneousForms \
+                 AutoFillFromAddressBook AutoFillCreditCardData; do
+          printf '%-28s ' "$k"; defaults read com.apple.Safari "$k" 2>&1 | tail -1
+        done
+        echo "--- read back via plutil (the file itself) ---"
+        plutil -p "$plist" 2>&1
+        ls -la "$plist"
+
+    - name: Probe http (after enabling AutoFill)
+      run: bb -Sdeps '{:deps {etaoin/etaoin {:local/root "."}}}' probe/autofill_scheme.clj http://localhost:8080
 
     # safaridriver --diagnose logs the WebDriver wire protocol, not WebKit's AutoFill
     # decisions -- checked against a local log, where "focus" appears zero times. What
