@@ -20,6 +20,10 @@ A release with an intentional breaking changes is marked with:
 == Unreleased
 
 * Changes
+** Secrets in WebDriver request payloads are now redacted from Etaoin's debug log and from the ex-data of the exceptions it throws.
+Previously the payload was reported verbatim, which meant text typed by `fill` (passwords), `set-cookie` values (session tokens), `js-execute` arguments, and the capabilities map sent when creating a session (provider tokens, proxy credentials) all appeared in cleartext.
+Credentials embedded in a `:webdriver-url` are stripped from the thrown map, as they already were from the log line.
+Set `ETAOIN_LOG_SECRETS` to `1`, `true` or `yes` to opt out and report payloads as-is.
 ** Migrate to org.clj-commons/slingshot
 ** Bumped deps
 ({lread})
