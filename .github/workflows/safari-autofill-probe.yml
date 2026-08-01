@@ -24,15 +24,24 @@ jobs:
 
     # The runner image only runs `safaridriver --enable` and sets AllowRemoteAutomation;
     # nothing in actions/runner-images mentions AutoFill. Confirm that from the inside.
+    #
+    # Read the container plist directly. `defaults read com.apple.Safari` reports the
+    # domain as missing even where the file exists -- TCC blocks the read and the error
+    # is indistinguishable from absence, so it is a false negative, not a measurement.
     - name: Safari AutoFill preferences
       run: |
+        plist="$HOME/Library/Containers/com.apple.Safari/Data/Library/Preferences/com.apple.Safari.plist"
+        echo "path: $plist"
+        ls -la "$plist" 2>&1 || echo "(plist absent)"
         for k in AutoFillPasswords AutoFillCreditCardData \
                  AutoFillFromAddressBook AutoFillMiscellaneousForms; do
-          printf '%s = ' "$k"
-          defaults read com.apple.Safari "$k" 2>&1 || true
+          printf '%-28s ' "$k"
+          plutil -extract "$k" raw "$plist" 2>&1 | head -1
         done
-        echo "--- whole com.apple.Safari domain ---"
-        defaults read com.apple.Safari 2>&1 | head -60 || true
+        echo "--- whole plist ---"
+        plutil -p "$plist" 2>&1 | head -80
+        echo "--- same keys via defaults, for contrast ---"
+        defaults read com.apple.Safari AutoFillPasswords 2>&1 | head -3
 
     # The live hypothesis: AutoFill is enabled but has nothing to offer, so Safari
     # never classifies the form as a login form and never moves focus.
@@ -59,6 +68,15 @@ jobs:
     - uses: DeLaGuardo/setup-clojure@13.6.1
       with:
         bb: latest
+
+    # The image already does this at build time, but assert it explicitly here: if
+    # WebDriver support were somehow off, every conclusion about AutoFill would be
+    # drawn from a Safari that never entered the state the tests assume.
+    - name: Enable safaridriver
+      run: |
+        sudo safaridriver --enable
+        echo "exit=$?"
+        /usr/libexec/PlistBuddy -c print ~/Library/WebDriver/com.apple.Safari.plist 2>&1 || true
 
     # Same invocation CI uses, narrowed to the namespace in question.
     - name: Run AutoFill namespace
