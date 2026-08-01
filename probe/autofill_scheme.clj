@@ -27,6 +27,14 @@
   (e/js-execute driver "var a = document.activeElement;
                         return a ? (a.id || a.tagName) : 'null'"))
 
+;; Enabling the AutoFill prefs on a runner did not bring the steal back, so the setting
+;; is necessary but not sufficient. A runner has no attended session; if the window is
+;; never key, Safari may skip AutoFill work that a focused window would do.
+(defn- window-state [driver]
+  (e/js-execute driver
+                "return document.hasFocus() + '/' + document.visibilityState +
+                        (document.hidden ? '/hidden' : '')"))
+
 (defn- focus-then-wait [driver page]
   (loop [tries 3]
     (e/go driver (str base "/" page))
@@ -49,11 +57,13 @@
 ;; persists on the machine running this. Logs land in ~/Library/Logs/com.apple.WebDriver.
 (e/with-safari {:args-driver ["--diagnose"]} driver
   (doseq [page pages]
-    (let [landed (focus-then-wait driver page)]
-      (println (format "%-34s focus -> %-8s %s"
+    (let [landed (focus-then-wait driver page)
+          state  (window-state driver)]
+      (println (format "%-34s focus -> %-8s %-7s hasFocus/visibility: %s"
                        page
                        landed
-                       (if (= "af-user" landed) "STOLEN" "kept"))))))
+                       (if (= "af-user" landed) "STOLEN" "kept")
+                       state)))))
 
 (println "\n--- diagnostic files written ---")
 (doseq [f (sort (remove before-logs (log-files)))]
