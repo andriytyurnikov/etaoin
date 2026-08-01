@@ -121,3 +121,29 @@ jobs:
 
     - name: Probe https
       run: bb -Sdeps '{:deps {etaoin/etaoin {:local/root "."}}}' probe/autofill_scheme.clj https://localhost:8443
+
+    # safaridriver --diagnose logs the WebDriver wire protocol, not WebKit's AutoFill
+    # decisions -- checked against a local log, where "focus" appears zero times. What
+    # it does carry is the negotiated capability blob, which is worth diffing against
+    # the same blob from a machine where the quirk fires.
+    - name: Summarise safaridriver diagnostics
+      if: always()
+      run: |
+        dir="$HOME/Library/Logs/com.apple.WebDriver"
+        ls -la "$dir" 2>&1 || echo "(no diagnostics written)"
+        mkdir -p diagnostics
+        cp "$dir"/*.txt diagnostics/ 2>/dev/null || true
+        for f in diagnostics/*.txt; do
+          [ -e "$f" ] || continue
+          echo "=== $f ==="
+          grep -m1 '"sessionId"' "$f" | sed 's/.*--> //' | tr ',' '\n' | sed 's/^ *//' | head -30
+          echo "--- line categories ---"
+          sed -E 's/^[0-9/: ]+//' "$f" | awk -F: '{print $1}' | sort | uniq -c | sort -rn | head
+        done
+
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: safaridriver-diagnostics
+        path: diagnostics/
+        if-no-files-found: warn

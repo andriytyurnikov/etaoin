@@ -37,11 +37,24 @@
       (do (Thread/sleep (long autofill-window-ms))
           (active-id driver)))))
 
+(def log-dir (str (System/getProperty "user.home") "/Library/Logs/com.apple.WebDriver"))
+
+(defn- log-files []
+  (into #{} (map str) (or (some-> (java.io.File. log-dir) .listFiles seq) [])))
+
+(def before-logs (log-files))
+
 (println (format "\n=== %s ===" base))
-(e/with-safari driver
+;; --diagnose is per-process rather than the DiagnosticsEnabled default, so nothing
+;; persists on the machine running this. Logs land in ~/Library/Logs/com.apple.WebDriver.
+(e/with-safari {:args-driver ["--diagnose"]} driver
   (doseq [page pages]
     (let [landed (focus-then-wait driver page)]
       (println (format "%-34s focus -> %-8s %s"
                        page
                        landed
                        (if (= "af-user" landed) "STOLEN" "kept"))))))
+
+(println "\n--- diagnostic files written ---")
+(doseq [f (sort (remove before-logs (log-files)))]
+  (println f (str "(" (.length (java.io.File. f)) " bytes)")))
