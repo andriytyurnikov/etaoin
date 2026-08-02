@@ -115,39 +115,49 @@ jobs:
           https://localhost:8443/autofill-off.html)"
         cat /tmp/https.log
 
-    # http first, as the control: it should match the failing CI result exactly.
-    - name: Probe http (control)
-      run: bb -Sdeps '{:deps {etaoin/etaoin {:local/root "."}}}' probe/autofill_scheme.clj http://localhost:8080
-
-    # The runner's plist is an empty dict, so every AutoFill key is unset and Safari
-    # behaves as though the features are off. Locally the quirk is gated on the
-    # "Usernames and passwords" toggle -- switch it off and the steal stops, switch it
-    # back on and it returns. There is no UI here, so write the keys directly and see
-    # whether an explicitly enabled Safari reproduces the issue.
-    #
-    # Safari is not running at this point; safaridriver launches it fresh for the probe
-    # below, so it reads these at startup. cfprefsd is killed to drop any cached view of
-    # a domain that did not previously exist.
-    - name: Enable Safari AutoFill explicitly
+    # Written before Safari has ever been launched on this machine. The previous attempt
+    # wrote these after a probe had already driven Safari, which leaves two ways to lose:
+    # a lingering Safari or cfprefsd can flush its cached view over the write on exit, and
+    # a Safari whose first launch saw the keys unset may not initialise AutoFill at all.
+    # Quitting first and writing before any launch closes both.
+    - name: Enable Safari AutoFill (before Safari ever launches)
       run: |
         plist="$HOME/Library/Containers/com.apple.Safari/Data/Library/Preferences/com.apple.Safari.plist"
-        for k in AutoFillPasswords AutoFillMiscellaneousForms \
-                 AutoFillFromAddressBook AutoFillCreditCardData; do
-          defaults write com.apple.Safari "$k" -bool true \
-            && echo "wrote $k" || echo "FAILED to write $k"
-        done
+        osascript -e 'quit app "Safari"' 2>/dev/null || true
+        defaults write com.apple.Safari AutoFillPasswords -bool true
+        defaults write com.apple.Safari AutoFillMiscellaneousForms -bool true
         killall cfprefsd 2>/dev/null || true
         sleep 1
-        echo "--- read back via defaults ---"
-        for k in AutoFillPasswords AutoFillMiscellaneousForms \
-                 AutoFillFromAddressBook AutoFillCreditCardData; do
+        echo "--- read back the value Safari will actually use ---"
+        defaults read com.apple.Safari AutoFillPasswords
+        defaults read com.apple.Safari AutoFillMiscellaneousForms
+        echo "--- the file itself ---"
+        plutil -p "$plist" 2>&1 | grep -i autofill || echo "(no AutoFill keys in plist)"
+        ls -la "$plist" 2>&1 || echo "(no plist yet)"
+
+    - name: Probe http (AutoFill enabled before first launch)
+      run: bb -Sdeps '{:deps {etaoin/etaoin {:local/root "."}}}' probe/autofill_scheme.clj http://localhost:8080
+
+    # Did Safari keep the values, or write its own over them on exit? This is the
+    # measurement the previous run never took.
+    - name: Re-assert AutoFill after Safari has run
+      run: |
+        plist="$HOME/Library/Containers/com.apple.Safari/Data/Library/Preferences/com.apple.Safari.plist"
+        echo "--- values as Safari left them ---"
+        for k in AutoFillPasswords AutoFillMiscellaneousForms; do
           printf '%-28s ' "$k"; defaults read com.apple.Safari "$k" 2>&1 | tail -1
         done
-        echo "--- read back via plutil (the file itself) ---"
-        plutil -p "$plist" 2>&1
-        ls -la "$plist"
+        echo "--- quit, rewrite, verify ---"
+        osascript -e 'quit app "Safari"' 2>/dev/null || true
+        defaults write com.apple.Safari AutoFillPasswords -bool true
+        defaults write com.apple.Safari AutoFillMiscellaneousForms -bool true
+        killall cfprefsd 2>/dev/null || true
+        sleep 1
+        defaults read com.apple.Safari AutoFillPasswords
+        defaults read com.apple.Safari AutoFillMiscellaneousForms
+        plutil -p "$plist" 2>&1 | grep -i autofill || echo "(no AutoFill keys in plist)"
 
-    - name: Probe http (after enabling AutoFill)
+    - name: Probe http (after re-asserting)
       run: bb -Sdeps '{:deps {etaoin/etaoin {:local/root "."}}}' probe/autofill_scheme.clj http://localhost:8080
 
     # safaridriver --diagnose logs the WebDriver wire protocol, not WebKit's AutoFill
